@@ -1,5 +1,3 @@
-import argparse
-
 import dgl.graphbolt as gb
 import torch
 import torch.nn.functional as F
