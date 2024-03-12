@@ -78,8 +78,8 @@ def train(model, dataloader, optimizer, desc, set_size):
         loss.backward()
         optimizer.step()
 
-        total_loss += float(loss)
-        total_correct += int(out.argmax(dim=-1).eq(y).sum())
+        total_loss += loss.item()
+        total_correct += out.argmax(dim=-1).eq(y).sum().item()
         num_batches += 1
 
         pbar.update(pyg_data.batch_size)
