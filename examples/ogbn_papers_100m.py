@@ -1,5 +1,4 @@
 import os
-import time
 from typing import Optional
 
 import torch
@@ -8,6 +7,8 @@ from ogb.nodeproppred import PygNodePropPredDataset
 
 from torch_geometric.loader import NeighborLoader
 from torch_geometric.nn import GCNConv
+
+from tqdm import tqdm
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -52,11 +53,15 @@ model = GCN(dataset.num_features, 64, dataset.num_classes).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=0.0005)
 
 
-def train():
+def train(desc):
     model.train()
+    total_loss = 0
+    total_correct = 0
+    total = split_idx['train'].size(0)
+
+    pbar = tqdm(desc=desc, total=total)
 
     for i, batch in enumerate(train_loader):
-        start = time.perf_counter()
         batch = batch.to(device)
         optimizer.zero_grad()
         out = model(batch.x, batch.edge_index)[:batch.batch_size]
@@ -65,9 +70,16 @@ def train():
         loss.backward()
         optimizer.step()
 
-        if i % 10 == 0:
-            print(f'Epoch: {epoch:02d}, Iteration: {i}, Loss: {loss:.4f}, '
-                  f's/iter: {time.perf_counter() - start:.6f}')
+        total_loss += loss.item()
+        total_correct += out.argmax(dim=-1).eq(y).sum().item()
+
+        pbar.update(batch.batch_size)
+
+    pbar.close()
+
+    avg_loss = total_loss / len(train_loader)
+    avg_accuracy = total_correct / total
+    return avg_loss, avg_accuracy
 
 
 @torch.no_grad()
@@ -91,9 +103,13 @@ def test(loader: NeighborLoader, val_steps: Optional[int] = None):
 
 
 for epoch in range(1, 4):
-    train()
+    train_loss, train_acc = train(f'Epoch {epoch} train')
     val_acc = test(val_loader, val_steps=100)
-    print(f'Val Acc: ~{val_acc:.4f}')
+    print(
+        f"Epoch {epoch}, Train Loss: {train_loss:.4f}, "
+        f"Train Accuracy: {train_acc:.4f}, "
+        f"Valid Accuracy: {val_acc:.4f}"
+    )
 
 test_acc = test(test_loader)
 print(f'Test Acc: {test_acc:.4f}')
