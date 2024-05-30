@@ -67,8 +67,7 @@ def create_sampling_graph(data: pyg.data.HeteroData) -> gb.SamplingGraph:
         edge_index_list.append(torch.stack((edge_index[0] + ntype_offset[src_i],
                                             edge_index[1] + ntype_offset[dst_i])))
     csc = to_scipy_sparse_matrix(torch.cat(edge_index_list, dim=1)).tocsc()
-    type_per_edge = torch.cat([torch.full((edge_index.size(1),), i)
-                               for i, t in enumerate(edge_index_list)])
+    type_per_edge = torch.cat([torch.full((t.size(1),), i) for i, t in enumerate(edge_index_list)])
     node_type_to_id = {t:i for i, t in enumerate(data.node_types)}
     edge_type_to_id = {':'.join(t):i for i, t in enumerate(data.edge_types)}
     return gb.fused_csc_sampling_graph(torch.from_numpy(csc.indptr).to(torch.long),
