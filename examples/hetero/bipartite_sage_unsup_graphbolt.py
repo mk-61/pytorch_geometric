@@ -64,9 +64,6 @@ def create_sampling_graph(data: pyg.data.HeteroData) -> gb.SamplingGraph:
     for src, et, dst in data.edge_types:
         src_i, dst_i = (data.node_types.index(role) for role in (src, dst))
         edge_index = data[src, et, dst].edge_index
-        print(f'Deduplicating {edge_index.size(1)} {(src, et, dst)} edges...')
-        edge_index = edge_index.to(device).unique(dim=1).to('cpu')
-        print(f'Found {edge_index.size(1)} unique')
         edge_index_list.append(torch.stack((edge_index[0] + ntype_offset[src_i],
                                             edge_index[1] + ntype_offset[dst_i])))
     csc = to_scipy_sparse_matrix(torch.cat(edge_index_list, dim=1)).tocsc()
@@ -82,21 +79,45 @@ def create_sampling_graph(data: pyg.data.HeteroData) -> gb.SamplingGraph:
                                        edge_type_to_id=edge_type_to_id)
 
 
+def preprocess_taobao(data: pyg.data.HeteroData) -> pyg.data.HeteroData:
+    data['user'].x = torch.arange(0, data['user'].num_nodes)
+    data['item'].x = torch.arange(0, data['item'].num_nodes)
+
+    # Only consider user<>item relationships for simplicity:
+    del data['category']
+    del data['item', 'category']
+    del data['user', 'item'].time
+    del data['user', 'item'].behavior
+
+    for src, et, dst in data.edge_types:
+        edge_index = data[src, et, dst].edge_index
+        print(f'Deduplicating {edge_index.size(1)} {(src, et, dst)} edges...')
+        edge_index = edge_index.to(device).unique(dim=1).to('cpu')
+        print(f'Found {edge_index.size(1)} unique')
+        data[src, et, dst].edge_index = edge_index
+
+    # Compute sparsified item<>item relationships through users:
+    print('Computing item<>item relationships...')
+    mat = to_scipy_sparse_matrix(data['user', 'item'].edge_index).tocsr()
+    mat = mat[:data['user'].num_nodes, :data['item'].num_nodes]
+    comat = mat.T @ mat
+    comat.setdiag(0)
+    comat = comat >= 3.
+    comat = comat.tocoo()
+    row = torch.from_numpy(comat.row).to(torch.long)
+    col = torch.from_numpy(comat.col).to(torch.long)
+    item_to_item_edge_index = torch.stack([row, col], dim=0)
+
+    # Add the generated item<>item relationships for high-order information:
+    data['item', 'item'].edge_index = item_to_item_edge_index
+    return data
+
+
 class TaobaoDataset(gb.Dataset):
     def __init__(self):
         super().__init__()
-        data = Taobao(osp.join(osp.dirname(osp.realpath(__file__)), '../../data/Taobao'))[0]
-        data['user'].x = torch.arange(0, data['user'].num_nodes)
-        data['item'].x = torch.arange(0, data['item'].num_nodes)
-
-        # Only consider user<>item relationships for simplicity:
-        del data['category']
-        del data['item', 'category']
-        del data['user', 'item'].time
-        del data['user', 'item'].behavior
-
-        # Add a reverse ('item', 'rev_to', 'user') relation for message passing:
-        data = T.ToUndirected()(data)
+        data = Taobao(osp.join(osp.dirname(osp.realpath(__file__)), '../../data/Taobao'),
+                      pre_transform=preprocess_taobao, transform=T.ToUndirected())[0]
         self._tasks = [LinkPredictionTask(data)]
         self._graph = create_sampling_graph(data)
 
@@ -108,24 +129,6 @@ class TaobaoDataset(gb.Dataset):
     def graph(self):
         return self._graph
 
-
-# # Compute sparsified item<>item relationships through users:
-# print('Computing item<>item relationships...')
-# mat = to_scipy_sparse_matrix(data['user', 'item'].edge_index).tocsr()
-# mat = mat[:data['user'].num_nodes, :data['item'].num_nodes]
-# comat = mat.T @ mat
-# comat.setdiag(0)
-# comat = comat >= 3.
-# comat = comat.tocoo()
-# row = torch.from_numpy(comat.row).to(torch.long)
-# col = torch.from_numpy(comat.col).to(torch.long)
-# item_to_item_edge_index = torch.stack([row, col], dim=0)
-#
-# # Add the generated item<>item relationships for high-order information:
-# train_data['item', 'item'].edge_index = item_to_item_edge_index
-# val_data['item', 'item'].edge_index = item_to_item_edge_index
-# test_data['item', 'item'].edge_index = item_to_item_edge_index
-# print('Done!')
 
 ############################################33
 
